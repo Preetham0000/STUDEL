@@ -19,10 +19,12 @@ export enum OrderStatus {
 export interface User {
   id: string;
   name: string;
-  phone: string;
+  email: string;
+  phone?: string;
   role: Role;
   campusId?: string;
   isApproved?: boolean;
+  vendorId?: string;
 }
 
 export interface Product {

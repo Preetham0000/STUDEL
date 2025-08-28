@@ -1,75 +1,112 @@
 import React, { createContext, useState, useEffect, ReactNode } from 'react';
 import { User, Role } from '../types';
-import { apiGetUserById, apiSignUp } from '../services/apiService';
+import { apiGetUserById, apiCreateUserProfile } from '../services/apiService';
+import { supabase } from '../services/supabaseClient';
+import { Session } from '@supabase/supabase-js';
+
+interface SignUpDetails {
+  email: string;
+  password: string;
+  name: string;
+  phone?: string;
+  role: Role;
+  campusId?: string;
+}
+
+interface SignInCredentials {
+    email: string;
+    password: string;
+}
 
 interface AuthContextType {
   user: User | null;
+  session: Session | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (userId: string) => Promise<void>;
+  signIn: (credentials: SignInCredentials) => Promise<void>;
+  signUp: (details: SignUpDetails) => Promise<void>;
   logout: () => void;
-  signup: (name: string, phone: string, role: Role, campusId?: string) => Promise<void>;
 }
 
 export const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    const storedUserId = localStorage.getItem('studel_userId');
-    if (storedUserId) {
-      apiGetUserById(storedUserId)
-        .then(userData => {
-          if (userData) {
-            setUser(userData);
-          }
-        })
-        .finally(() => setIsLoading(false));
-    } else {
-      setIsLoading(false);
-    }
-  }, []);
-
-  const login = async (userId: string) => {
-    setIsLoading(true);
-    try {
-        const userData = await apiGetUserById(userId);
-        if (userData) {
-            setUser(userData);
-            localStorage.setItem('studel_userId', userData.id);
-        } else {
-            throw new Error("User not found");
+    const getInitialSession = async () => {
+        const { data: { session } } = await supabase.auth.getSession();
+        setSession(session);
+        if (session?.user) {
+            const userData = await apiGetUserById(session.user.id);
+            setUser(userData || null);
         }
-    } finally {
         setIsLoading(false);
-    }
+    };
+    
+    getInitialSession();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      async (_event, session) => {
+        setSession(session);
+        if (session?.user) {
+            if (!user || user.id !== session.user.id) {
+                const userData = await apiGetUserById(session.user.id);
+                setUser(userData || null);
+            }
+        } else {
+            setUser(null);
+        }
+        if (isLoading) setIsLoading(false);
+      }
+    );
+
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
+  }, [user, isLoading]);
+  
+  const signIn = async ({ email, password }: SignInCredentials) => {
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    // onAuthStateChange handles setting the user state
   };
   
-  const signup = async (name: string, phone: string, role: Role, campusId?: string) => {
-    setIsLoading(true);
-    try {
-        const newUser = await apiSignUp(name, phone, role, campusId);
-        setUser(newUser);
-        localStorage.setItem('studel_userId', newUser.id);
-    } finally {
-        setIsLoading(false);
-    }
+  const signUp = async (details: SignUpDetails) => {
+    const { data, error } = await supabase.auth.signUp({
+        email: details.email,
+        password: details.password,
+    });
+    if (error) throw error;
+    if (!data.user) throw new Error("Sign up failed, please try again.");
+
+    // Now create the associated user profile in our public table
+    const newUserProfile = await apiCreateUserProfile(
+        data.user.id,
+        details.name,
+        details.email,
+        details.phone,
+        details.role,
+        details.campusId
+    );
+    setUser(newUserProfile); // Manually set user state immediately after profile creation
   };
 
-  const logout = () => {
+  const logout = async () => {
+    await supabase.auth.signOut();
     setUser(null);
-    localStorage.removeItem('studel_userId');
   };
 
   const value = {
     user,
-    isAuthenticated: !!user,
+    session,
+    isAuthenticated: !!session?.user,
     isLoading,
-    login,
+    signIn,
+    signUp,
     logout,
-    signup,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -1,71 +1,115 @@
-import { db } from '../firebase';
+import { supabase } from './supabaseClient';
 import { User, Vendor, Product, DeliveryZone, Order, OrderStatus, Role, CartItem } from '../types';
 
-const mapDocToData = <T,>(d: any): T => ({ ...d.data(), id: d.id } as T);
+// Helper to generate a unique enough ID for orders/products
+const generateId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-// --- Auth ---
-// Note: This is a user lookup in the database, not true Firebase Authentication.
-// A full implementation would use Firebase Auth SDK for sign-in.
-export const apiLogin = async (phone: string): Promise<User | undefined> => {
-  const usersRef = db.collection('users');
-  const q = usersRef.where('phone', '==', phone).limit(1);
-  const querySnapshot = await q.get();
-  if (querySnapshot.empty) {
-    return undefined;
-  }
-  return mapDocToData<User>(querySnapshot.docs[0]);
-};
+// --- Data Mapping Helpers ---
 
-export const apiSignUp = async (name: string, phone: string, role: Role, campusId?: string): Promise<User> => {
-  const existingUser = await apiLogin(phone);
-  if (existingUser) {
-    throw new Error("A user with this phone number already exists.");
-  }
+const mapUserFromSupabase = (data: any): User => ({
+    id: data.id,
+    name: data.name,
+    email: data.email,
+    phone: data.phone,
+    role: data.role,
+    campusId: data.campus_id,
+    isApproved: data.is_approved,
+    vendorId: data.vendor_id,
+});
 
-  const newUser = {
-    name,
-    phone,
-    role,
-    isApproved: role !== Role.RUNNER,
-    campusId: role === Role.RUNNER ? campusId : undefined,
-  };
-  
-  const docRef = await db.collection('users').add(newUser);
-  return { ...newUser, id: docRef.id };
-};
+const mapOrderFromSupabase = (data: any): Order => ({
+    id: data.id,
+    customerId: data.customer_id,
+    customerName: data.customer_name,
+    runnerId: data.runner_id,
+    runnerName: data.runner_name,
+    vendorId: data.vendor_id,
+    items: data.items,
+    totalPrice: data.total_price,
+    deliveryFee: data.delivery_fee,
+    finalAmount: data.final_amount,
+    deliveryZone: data.delivery_zone,
+    status: data.status,
+    paymentCollected: data.payment_collected,
+    createdAt: new Date(data.created_at).getTime(),
+    statusHistory: data.status_history,
+});
 
+const mapVendorFromSupabase = (data: any): Vendor => ({
+    id: data.id,
+    name: data.name,
+    operatingHours: data.operating_hours,
+    image: data.image,
+});
+
+const mapProductFromSupabase = (data: any): Product => ({
+    id: data.id,
+    name: data.name,
+    description: data.description,
+    price: data.price,
+    category: data.category,
+    isAvailable: data.is_available,
+    vendorId: data.vendor_id,
+});
+
+
+// --- Auth & User Profile ---
 
 export const apiGetUserById = async (id: string): Promise<User | undefined> => {
-    const docRef = db.collection('users').doc(id);
-    const docSnap = await docRef.get();
-    if (docSnap.exists) {
-        return mapDocToData<User>(docSnap);
+    const { data, error } = await supabase.from('users').select('*').eq('id', id).single();
+    if (error) {
+        console.error("Error fetching user:", error.message);
+        return undefined;
     }
-    return undefined;
+    return data ? mapUserFromSupabase(data) : undefined;
 };
 
+export const apiCreateUserProfile = async (id: string, name: string, email: string, phone: string | undefined, role: Role, campusId?: string): Promise<User> => {
+    const { data, error } = await supabase
+        .from('users')
+        .insert({
+            id,
+            name,
+            email,
+            phone,
+            role,
+            is_approved: role !== Role.RUNNER, // Runners need approval
+            campus_id: role === Role.RUNNER ? campusId : undefined,
+            vendor_id: role === Role.CANTEEN ? 'vendor1' : undefined, // Default, should be assigned by admin later
+        })
+        .select()
+        .single();
+
+    if (error) {
+        console.error("Error creating user profile:", error);
+        throw new Error("Could not create user profile.");
+    }
+    return mapUserFromSupabase(data);
+}
 
 // --- Customer ---
 export const apiFetchVendors = async (): Promise<Vendor[]> => {
-    const querySnapshot = await db.collection('vendors').get();
-    return querySnapshot.docs.map(d => mapDocToData<Vendor>(d));
+    const { data, error } = await supabase.from('vendors').select('*');
+    if (error) throw error;
+    return data.map(mapVendorFromSupabase);
 };
 
 export const apiFetchVendorById = async (id: string): Promise<Vendor | undefined> => {
-    const docRef = db.collection('vendors').doc(id);
-    const docSnap = await docRef.get();
-    return docSnap.exists ? mapDocToData<Vendor>(docSnap) : undefined;
+    const { data, error } = await supabase.from('vendors').select('*').eq('id', id).single();
+    if (error) throw error;
+    return data ? mapVendorFromSupabase(data) : undefined;
 };
 
 export const apiFetchProductsByVendor = async (vendorId: string): Promise<Product[]> => {
-    const q = db.collection('products').where('vendorId', '==', vendorId);
-    const querySnapshot = await q.get();
-    return querySnapshot.docs.map(d => mapDocToData<Product>(d));
+    const { data, error } = await supabase.from('products').select('*').eq('vendor_id', vendorId);
+    if (error) throw error;
+    return data.map(mapProductFromSupabase);
 };
 
 export const apiFetchDeliveryZones = async (): Promise<DeliveryZone[]> => {
-    const querySnapshot = await db.collection('deliveryZones').get();
-    return querySnapshot.docs.map(d => mapDocToData<DeliveryZone>(d));
+    const { data, error } = await supabase.from('delivery_zones').select('*');
+    if (error) throw error;
+    return data.map(z => ({...z, deliveryFee: z.delivery_fee}));
 };
 
 export const apiPlaceOrder = async (orderData: {
@@ -76,168 +120,164 @@ export const apiPlaceOrder = async (orderData: {
   deliveryZone: DeliveryZone;
 }): Promise<Order> => {
   const totalPrice = orderData.items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const deliveryFee = orderData.deliveryZone.deliveryFee;
   const newOrderData = {
-    ...orderData,
-    totalPrice,
-    deliveryFee: orderData.deliveryZone.deliveryFee,
-    finalAmount: totalPrice + orderData.deliveryZone.deliveryFee,
+    id: generateId('order'),
+    customer_id: orderData.customerId,
+    customer_name: orderData.customerName,
+    vendor_id: orderData.vendorId,
+    items: orderData.items,
+    delivery_zone: orderData.deliveryZone,
+    total_price: totalPrice,
+    delivery_fee: deliveryFee,
+    final_amount: totalPrice + deliveryFee,
     status: OrderStatus.PLACED,
-    paymentCollected: false,
-    createdAt: Date.now(),
-    statusHistory: [{ status: OrderStatus.PLACED, timestamp: Date.now() }],
+    payment_collected: false,
+    status_history: [{ status: OrderStatus.PLACED, timestamp: Date.now() }],
   };
-
-  const docRef = await db.collection('orders').add(newOrderData);
-  return { ...newOrderData, id: docRef.id };
+  
+  const { data, error } = await supabase.from('orders').insert(newOrderData).select().single();
+  if(error) throw error;
+  return mapOrderFromSupabase(data);
 };
 
 export const apiFetchCustomerOrders = async (customerId: string): Promise<Order[]> => {
-  const q = db.collection('orders').where('customerId', '==', customerId).orderBy('createdAt', 'desc');
-  const querySnapshot = await q.get();
-  return querySnapshot.docs.map(d => mapDocToData<Order>(d));
+  const { data, error } = await supabase.from('orders').select('*').eq('customer_id', customerId).order('created_at', { ascending: false });
+  if (error) throw error;
+  return data.map(mapOrderFromSupabase);
 };
 
 export const apiCancelOrder = async (orderId: string): Promise<Order> => {
-    const orderRef = db.collection('orders').doc(orderId);
-    const orderSnap = await orderRef.get();
-    const order = mapDocToData<Order>(orderSnap);
+    const { data: existingOrder, error: fetchError } = await supabase.from('orders').select('status, status_history').eq('id', orderId).single();
+    if(fetchError || !existingOrder) throw new Error("Order not found");
+    if(existingOrder.status !== OrderStatus.PLACED) throw new Error("Order cannot be cancelled.");
 
-    if (!order || order.status !== OrderStatus.PLACED) {
-        throw new Error("Order cannot be cancelled.");
-    }
-
-    const newStatusHistory = [...order.statusHistory, { status: OrderStatus.CANCELLED, timestamp: Date.now() }];
-    await orderRef.update({ status: OrderStatus.CANCELLED, statusHistory: newStatusHistory });
-    return { ...order, status: OrderStatus.CANCELLED };
+    const newStatusHistory = [...existingOrder.status_history, { status: OrderStatus.CANCELLED, timestamp: Date.now() }];
+    const { data, error } = await supabase.from('orders').update({ status: OrderStatus.CANCELLED, status_history: newStatusHistory }).eq('id', orderId).select().single();
+    if (error) throw error;
+    return mapOrderFromSupabase(data);
 };
-
 
 // --- Runner ---
 export const apiFetchAvailableOrders = async (): Promise<Order[]> => {
-    const q = db.collection('orders').where('status', '==', OrderStatus.READY_FOR_PICKUP);
-    const querySnapshot = await q.get();
-    return querySnapshot.docs.map(d => mapDocToData<Order>(d));
+    const { data, error } = await supabase.from('orders').select('*').eq('status', OrderStatus.READY_FOR_PICKUP);
+    if (error) throw error;
+    return data.map(mapOrderFromSupabase);
 };
 
 export const apiAcceptOrder = async (orderId: string, runnerId: string, runnerName: string): Promise<Order> => {
-    const orderRef = db.collection('orders').doc(orderId);
-    const orderSnap = await orderRef.get();
-    const order = mapDocToData<Order>(orderSnap);
+    const { data: existingOrder, error: fetchError } = await supabase.from('orders').select('status, status_history').eq('id', orderId).single();
+    if (fetchError || !existingOrder) throw new Error("Order not found");
+    if (existingOrder.status !== OrderStatus.READY_FOR_PICKUP) throw new Error("Order not available for pickup.");
     
-    if (!order || order.status !== OrderStatus.READY_FOR_PICKUP) {
-        throw new Error("Order not available for pickup.");
-    }
-    
-    const newStatusHistory = [...order.statusHistory, { status: OrderStatus.PICKED_UP, timestamp: Date.now() }];
-    await orderRef.update({
-        runnerId,
-        runnerName,
-        status: OrderStatus.PICKED_UP,
-        statusHistory: newStatusHistory
-    });
-    return { ...order, runnerId, runnerName, status: OrderStatus.PICKED_UP };
+    const newStatusHistory = [...existingOrder.status_history, { status: OrderStatus.PICKED_UP, timestamp: Date.now() }];
+    const { data, error } = await supabase.from('orders').update({ 
+        status: OrderStatus.PICKED_UP, 
+        runner_id: runnerId,
+        runner_name: runnerName,
+        status_history: newStatusHistory
+    }).eq('id', orderId).select().single();
+
+    if (error) throw error;
+    return mapOrderFromSupabase(data);
 };
 
 export const apiFetchRunnerActiveOrder = async (runnerId: string): Promise<Order | undefined> => {
     const activeStatuses = [OrderStatus.PICKED_UP, OrderStatus.ARRIVING];
-    const q = db.collection('orders').where('runnerId', '==', runnerId).where('status', 'in', activeStatuses).limit(1);
-    const querySnapshot = await q.get();
-    return querySnapshot.empty ? undefined : mapDocToData<Order>(querySnapshot.docs[0]);
+    const { data, error } = await supabase.from('orders').select('*').eq('runner_id', runnerId).in('status', activeStatuses).maybeSingle();
+    if (error) throw error;
+    return data ? mapOrderFromSupabase(data) : undefined;
 };
 
 export const apiUpdateOrderStatusByRunner = async (orderId: string, status: OrderStatus.ARRIVING | OrderStatus.DELIVERED): Promise<Order> => {
-    const orderRef = db.collection('orders').doc(orderId);
-    const orderSnap = await orderRef.get();
-    const order = mapDocToData<Order>(orderSnap);
+    const { data: existingOrder, error: fetchError } = await supabase.from('orders').select('status_history').eq('id', orderId).single();
+    if(fetchError || !existingOrder) throw new Error("Order not found");
 
-    const newStatusHistory = [...order.statusHistory, { status, timestamp: Date.now() }];
-    const updatePayload: any = { status, statusHistory: newStatusHistory };
-    if(status === OrderStatus.DELIVERED) {
-        updatePayload.paymentCollected = true;
+    const newStatusHistory = [...existingOrder.status_history, { status, timestamp: Date.now() }];
+    const updatePayload: any = { status: status, status_history: newStatusHistory };
+    if (status === OrderStatus.DELIVERED) {
+        updatePayload.payment_collected = true;
     }
-
-    await orderRef.update(updatePayload);
-    return { ...order, ...updatePayload };
+    
+    const { data, error } = await supabase.from('orders').update(updatePayload).eq('id', orderId).select().single();
+    if (error) throw error;
+    return mapOrderFromSupabase(data);
 };
 
 export const apiFetchRunnerDailyEarnings = async (runnerId: string): Promise<{orders: Order[], total: number}> => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const q = db.collection('orders')
-        .where('runnerId', '==', runnerId)
-        .where('status', '==', OrderStatus.DELIVERED)
-        .where('createdAt', '>=', today.getTime());
-    
-    const querySnapshot = await q.get();
-    const runnerOrders = querySnapshot.docs.map(d => mapDocToData<Order>(d));
-    const total = runnerOrders.reduce((sum, order) => sum + order.deliveryFee, 0);
-    return { orders: runnerOrders, total };
-};
+    const { data, error } = await supabase.from('orders')
+        .select('*')
+        .eq('runner_id', runnerId)
+        .eq('status', OrderStatus.DELIVERED)
+        .gte('created_at', today.toISOString());
 
+    if (error) throw error;
+    const orders = data.map(mapOrderFromSupabase);
+    const total = orders.reduce((sum, order) => sum + order.deliveryFee, 0);
+    return { orders, total };
+};
 
 // --- Canteen/Vendor ---
 export const apiFetchVendorOrders = async (vendorId: string): Promise<Order[]> => {
-    // In a real app, you would use the logged-in vendor's ID.
-    // Here we fetch all non-completed orders for demonstration.
     const statuses = [OrderStatus.PLACED, OrderStatus.ACCEPTED, OrderStatus.PREPARING, OrderStatus.READY_FOR_PICKUP];
-    const q = db.collection('orders').where('status', 'in', statuses).orderBy('createdAt', 'desc');
-    const querySnapshot = await q.get();
-    return querySnapshot.docs.map(d => mapDocToData<Order>(d));
+    const { data, error } = await supabase.from('orders').select('*').eq('vendor_id', vendorId).in('status', statuses).order('created_at', { ascending: false });
+    if (error) throw error;
+    return data.map(mapOrderFromSupabase);
 };
 
 export const apiUpdateOrderStatusByVendor = async (orderId: string, status: OrderStatus.ACCEPTED | OrderStatus.PREPARING | OrderStatus.READY_FOR_PICKUP): Promise<Order> => {
-    const orderRef = db.collection('orders').doc(orderId);
-    const orderSnap = await orderRef.get();
-    const order = mapDocToData<Order>(orderSnap);
-
-    const newStatusHistory = [...order.statusHistory, { status, timestamp: Date.now() }];
-    await orderRef.update({ status, statusHistory: newStatusHistory });
-    return { ...order, status };
+    const { data: existingOrder, error: fetchError } = await supabase.from('orders').select('status_history').eq('id', orderId).single();
+    if(fetchError || !existingOrder) throw new Error("Order not found");
+    
+    const newStatusHistory = [...existingOrder.status_history, { status, timestamp: Date.now() }];
+    const { data, error } = await supabase.from('orders').update({ status: status, status_history: newStatusHistory }).eq('id', orderId).select().single();
+    if (error) throw error;
+    return mapOrderFromSupabase(data);
 };
 
 export const apiToggleProductAvailability = async (itemId: string): Promise<Product> => {
-    const itemRef = db.collection('products').doc(itemId);
-    const itemSnap = await itemRef.get();
-    const item = mapDocToData<Product>(itemSnap);
-    
-    const newAvailability = !item.isAvailable;
-    await itemRef.update({ isAvailable: newAvailability });
-    return { ...item, isAvailable: newAvailability };
+    const { data: product, error: fetchError } = await supabase.from('products').select('is_available').eq('id', itemId).single();
+    if(fetchError || !product) throw new Error("Product not found");
+
+    const { data, error } = await supabase.from('products').update({ is_available: !product.is_available }).eq('id', itemId).select().single();
+    if (error) throw error;
+    return mapProductFromSupabase(data);
 };
 
 // --- Admin ---
 export const apiFetchAllRunners = async (): Promise<User[]> => {
-    const q = db.collection('users').where('role', '==', Role.RUNNER);
-    const querySnapshot = await q.get();
-    return querySnapshot.docs.map(d => mapDocToData<User>(d));
+    const { data, error } = await supabase.from('users').select('*').eq('role', Role.RUNNER);
+    if (error) throw error;
+    return data.map(mapUserFromSupabase);
 };
 
 export const apiApproveRunner = async (runnerId: string): Promise<User> => {
-    const runnerRef = db.collection('users').doc(runnerId);
-    await runnerRef.update({ isApproved: true });
-    const runnerSnap = await runnerRef.get();
-    return mapDocToData<User>(runnerSnap);
+    const { data, error } = await supabase.from('users').update({ is_approved: true }).eq('id', runnerId).select().single();
+    if (error) throw error;
+    return mapUserFromSupabase(data);
 };
 
 export const apiUpdateDeliveryZone = async (zone: DeliveryZone): Promise<DeliveryZone> => {
-    const zoneRef = db.collection('deliveryZones').doc(zone.id);
-    await zoneRef.update({ name: zone.name, deliveryFee: zone.deliveryFee });
-    return zone;
+    const { data, error } = await supabase.from('delivery_zones').update({ name: zone.name, delivery_fee: zone.deliveryFee }).eq('id', zone.id).select().single();
+    if (error) throw error;
+    return {...data, deliveryFee: data.delivery_fee};
 };
 
 export const apiFetchAllOrders = async (): Promise<Order[]> => {
-    const q = db.collection('orders').orderBy('createdAt', 'desc');
-    const querySnapshot = await q.get();
-    return querySnapshot.docs.map(d => mapDocToData<Order>(d));
+    const { data, error } = await supabase.from('orders').select('*').order('created_at', { ascending: false });
+    if (error) throw error;
+    return data.map(mapOrderFromSupabase);
 };
 
 export const apiForceCancelOrder = async (orderId: string): Promise<Order> => {
-    const orderRef = db.collection('orders').doc(orderId);
-    const orderSnap = await orderRef.get();
-    const order = mapDocToData<Order>(orderSnap);
+    const { data: existingOrder, error: fetchError } = await supabase.from('orders').select('status_history').eq('id', orderId).single();
+    if(fetchError || !existingOrder) throw new Error("Order not found");
 
-    const newStatusHistory = [...order.statusHistory, { status: OrderStatus.CANCELLED, timestamp: Date.now() }];
-    await orderRef.update({ status: OrderStatus.CANCELLED, statusHistory: newStatusHistory });
-    return { ...order, status: OrderStatus.CANCELLED };
+    const newStatusHistory = [...existingOrder.status_history, { status: OrderStatus.CANCELLED, timestamp: Date.now() }];
+    const { data, error } = await supabase.from('orders').update({ status: OrderStatus.CANCELLED, status_history: newStatusHistory }).eq('id', orderId).select().single();
+    if (error) throw error;
+    return mapOrderFromSupabase(data);
 };

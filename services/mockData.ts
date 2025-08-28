@@ -2,18 +2,27 @@ import { User, Role, Vendor, Product, DeliveryZone, Order } from '../types';
 
 export const MOCK_USERS: User[] = [
   // Customers
-  { id: 'cust1', name: 'Alice Johnson', phone: '1111111111', role: Role.CUSTOMER },
-  { id: 'cust2', name: 'Bob Williams', phone: '2222222222', role: Role.CUSTOMER },
+  // FIX: Added missing email property.
+  { id: 'cust1', name: 'Alice Johnson', email: 'alice@example.com', phone: '1111111111', role: Role.CUSTOMER },
+  // FIX: Added missing email property.
+  { id: 'cust2', name: 'Bob Williams', email: 'bob@example.com', phone: '2222222222', role: Role.CUSTOMER },
   // Runners
-  { id: 'run1', name: 'Charlie Brown', phone: '3333333333', role: Role.RUNNER, campusId: 'RUN001', isApproved: true },
-  { id: 'run2', name: 'Diana Miller', phone: '4444444444', role: Role.RUNNER, campusId: 'RUN002', isApproved: true },
-  { id: 'run3', name: 'Eve Davis', phone: '5555555555', role: Role.RUNNER, campusId: 'RUN003', isApproved: false },
-  { id: 'run4', name: 'Frank White', phone: '6666666666', role: Role.RUNNER, campusId: 'RUN004', isApproved: true },
-  { id: 'run5', name: 'Grace Lee', phone: '7777777777', role: Role.RUNNER, campusId: 'RUN005', isApproved: false },
+  // FIX: Added missing email property.
+  { id: 'run1', name: 'Charlie Brown', email: 'charlie@example.com', phone: '3333333333', role: Role.RUNNER, campusId: 'RUN001', isApproved: true },
+  // FIX: Added missing email property.
+  { id: 'run2', name: 'Diana Miller', email: 'diana@example.com', phone: '4444444444', role: Role.RUNNER, campusId: 'RUN002', isApproved: true },
+  // FIX: Added missing email property.
+  { id: 'run3', name: 'Eve Davis', email: 'eve@example.com', phone: '5555555555', role: Role.RUNNER, campusId: 'RUN003', isApproved: false },
+  // FIX: Added missing email property.
+  { id: 'run4', name: 'Frank White', email: 'frank@example.com', phone: '6666666666', role: Role.RUNNER, campusId: 'RUN004', isApproved: true },
+  // FIX: Added missing email property.
+  { id: 'run5', name: 'Grace Lee', email: 'grace@example.com', phone: '7777777777', role: Role.RUNNER, campusId: 'RUN005', isApproved: false },
   // Canteen/Vendor Staff
-  { id: 'cant1', name: 'Henry Taylor', phone: '8888888888', role: Role.CANTEEN },
+  // FIX: Added missing email property.
+  { id: 'cant1', name: 'Henry Taylor', email: 'henry@example.com', phone: '8888888888', role: Role.CANTEEN },
   // Admin
-  { id: 'admin1', name: 'Ivy Green', phone: '9999999999', role: Role.ADMIN },
+  // FIX: Added missing email property.
+  { id: 'admin1', name: 'Ivy Green', email: 'ivy@example.com', phone: '9999999999', role: Role.ADMIN },
 ];
 
 export const MOCK_VENDORS: Vendor[] = [

@@ -19,18 +19,21 @@ const CanteenPortal: React.FC = () => {
     const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
     const fetchData = useCallback(async () => {
-        if (!user) return;
+        // FIX: Use the logged-in user's vendorId to fetch their specific data.
+        if (!user || !user.vendorId) {
+            setIsLoading(false);
+            return;
+        };
         setIsLoading(true);
         try {
-            // This needs to be dynamic based on the logged in vendor user in a real app
             const [ordersData, productsData] = await Promise.all([
-                api.apiFetchVendorOrders('vendor_all'), 
-                api.apiFetchProductsByVendor('vendor1'), // Example, should be dynamic
+                api.apiFetchVendorOrders(user.vendorId), 
+                api.apiFetchProductsByVendor(user.vendorId),
             ]);
             setOrders(ordersData);
             setProducts(productsData);
         } catch (error) {
-            setNotification({ message: 'Failed to load data.', type: 'error' });
+            setNotification({ message: 'Failed to load canteen data.', type: 'error' });
         } finally {
             setIsLoading(false);
         }
